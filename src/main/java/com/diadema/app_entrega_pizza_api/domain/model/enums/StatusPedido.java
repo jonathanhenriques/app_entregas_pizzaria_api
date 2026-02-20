@@ -1,4 +1,4 @@
-package model.enums;
+package com.diadema.app_entrega_pizza_api.domain.model.enums;
 
 public enum StatusPedido {
     AGUARDANDO_PREPARO, // Pedido feito pelo cliente
