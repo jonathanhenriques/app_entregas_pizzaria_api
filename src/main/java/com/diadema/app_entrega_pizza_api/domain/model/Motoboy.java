@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Data
 @Entity
@@ -13,8 +14,8 @@ import java.util.List;
 public class Motoboy {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @GeneratedValue(strategy = GenerationType.UUID) // Gera UUIDs automaticamente
+    private UUID id; // Mudou de Long para UUID
 
     @NotBlank(message = "Nome é obrigatório")
     private String nome;

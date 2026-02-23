@@ -1,65 +1,97 @@
 package com.diadema.app_entrega_pizza_api.domain.controller;
 
+import com.diadema.app_entrega_pizza_api.domain.assembler.PedidoAssembler;
 import com.diadema.app_entrega_pizza_api.domain.model.Motoboy;
 import com.diadema.app_entrega_pizza_api.domain.model.Pedido;
-import com.diadema.app_entrega_pizza_api.domain.model.enums.StatusPedido;
-import com.diadema.app_entrega_pizza_api.domain.repository.MotoboyRepository;
-import com.diadema.app_entrega_pizza_api.domain.repository.PedidoRepository;
+import com.diadema.app_entrega_pizza_api.domain.model.dto.GanhosDTO;
+import com.diadema.app_entrega_pizza_api.domain.model.dto.PedidoResumoDTO;
+import com.diadema.app_entrega_pizza_api.domain.service.MotoboyService;
+import com.diadema.app_entrega_pizza_api.domain.service.PedidoService;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.ResponseEntity;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.temporal.TemporalAdjusters;
+import com.diadema.app_entrega_pizza_api.domain.model.enums.StatusPedido;
+import com.diadema.app_entrega_pizza_api.domain.repository.PedidoRepository; // Importe o repo aqui para agilizar, ou crie no Servic
 
 import java.util.List;
-import java.util.Optional;
-
+import java.util.UUID;
 @RestController
 @RequestMapping("/api/motoboys")
-@CrossOrigin(origins = "*")
+//@CrossOrigin(origins = "*")
 public class MotoboyController {
 
     @Autowired
-    private MotoboyRepository motoboyRepository;
+    private MotoboyService motoboyService;
 
     @Autowired
-    private PedidoRepository pedidoRepository; // [NOVA INJEÇÃO]
+    private PedidoService pedidoService; // Único ponto de contato para lógica de pedidos
+
+    @Autowired
+    private PedidoAssembler pedidoAssembler;
 
     @GetMapping
-    public List<Motoboy> listarTodos() {
-        return motoboyRepository.findAll();
+    public Page<Motoboy> listarTodos(@PageableDefault(size = 10) Pageable pageable) {
+        return motoboyService.listarTodos(pageable);
     }
 
+
+
     @PostMapping
-    public ResponseEntity<Motoboy> cadastrar(@RequestBody @Valid Motoboy motoboy) {
-        return ResponseEntity.ok(motoboyRepository.save(motoboy));
+    @ResponseStatus(HttpStatus.CREATED)
+    public Motoboy cadastrar(@RequestBody @Valid Motoboy motoboy) {
+        return motoboyService.salvar(motoboy);
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Motoboy> buscarPorId(@PathVariable Long id) {
-        return motoboyRepository.findById(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+    public Motoboy buscarPorId(@PathVariable UUID id) {
+        return motoboyService.buscarOuFalhar(id);
     }
 
-    // --- NOVO ENDPOINT SOLICITADO ---
-    // URL: GET /api/motoboys/{id}/entregas-pendentes
-    // Objetivo: O motoboy consulta na própria rota dele o que tem para entregar
+    // --- ENDPOINT OTIMIZADO ---
+    // Antes: Fazia a busca manual no Repository [6]
+    // Agora: Chama o PedidoService que já tem essa regra pronta e testada [7]
     @GetMapping("/{id}/entregas-pendentes")
-    public ResponseEntity<?> consultarEntregasDoMotoboy(@PathVariable Long id) {
+    public List<PedidoResumoDTO> consultarEntregasDoMotoboy(@PathVariable UUID id) {
+        // O Service já valida se o motoboy existe e busca as entregas
+        return pedidoAssembler.toCollectionDTO(pedidoService.listarEntregasAtuais(id));
+    }
 
-        // 1. Verifica se o motoboy existe
-        Optional<Motoboy> motoboyOpt = motoboyRepository.findById(id);
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void excluir(@PathVariable UUID id) {
+        motoboyService.excluir(id);
+    }
 
-        if (motoboyOpt.isEmpty()) {
-            return ResponseEntity.status(404).body("Motoboy não encontrado");
-        }
+    @GetMapping("/{id}/historico-hoje")
+    public List<PedidoResumoDTO> historicoHoje(@PathVariable UUID id) {
+        // O Controller não sabe "que dia é hoje", ele apenas pede ao serviço
+        List<Pedido> pedidos = pedidoService.listarEntregasHoje(id);
+        return pedidoAssembler.toCollectionDTO(pedidos);
+    }
 
-        // 2. Busca na tabela de pedidos usando o Objeto Motoboy
-        List<Pedido> entregas = pedidoRepository.findByMotoboyAndStatus(
-                motoboyOpt.get(),
-                StatusPedido.SAIU_PARA_ENTREGA
-        );
+    @GetMapping("/{id}/historico-semana")
+    public List<PedidoResumoDTO> historicoSemana(@PathVariable UUID id) {
+        List<Pedido> pedidos = pedidoService.listarEntregasSemana(id);
+        return pedidoAssembler.toCollectionDTO(pedidos);
+    }
 
-        return ResponseEntity.ok(entregas);
+    @GetMapping("/{id}/historico-mes")
+    public List<PedidoResumoDTO> historicoMes(@PathVariable UUID id) {
+        List<Pedido> pedidos = pedidoService.listarEntregasMes(id);
+        return pedidoAssembler.toCollectionDTO(pedidos);
+    }
+
+    @GetMapping("/{id}/ganhos-dia")
+    public GanhosDTO consultarGanhosDia(@PathVariable UUID id) {
+        return pedidoService.calcularGanhosDoDia(id);
     }
 }

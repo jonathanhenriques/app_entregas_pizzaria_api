@@ -1,110 +1,86 @@
 package com.diadema.app_entrega_pizza_api.domain.controller;
-import com.diadema.app_entrega_pizza_api.domain.model.Motoboy;
+import com.diadema.app_entrega_pizza_api.domain.assembler.PedidoAssembler;
 import com.diadema.app_entrega_pizza_api.domain.model.Pedido;
-import com.diadema.app_entrega_pizza_api.domain.model.enums.StatusPedido;
-import com.diadema.app_entrega_pizza_api.domain.repository.MotoboyRepository;
-import com.diadema.app_entrega_pizza_api.domain.repository.PedidoRepository;
+import com.diadema.app_entrega_pizza_api.domain.model.dto.PedidoInputDTO;
+import com.diadema.app_entrega_pizza_api.domain.model.dto.PedidoResumoDTO;
+import com.diadema.app_entrega_pizza_api.domain.service.PedidoService;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.ResponseEntity;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/pedidos")
-@CrossOrigin(origins = "*")
+//@CrossOrigin(origins = "*")
 public class PedidoController {
 
     @Autowired
-    private PedidoRepository pedidoRepository;
+    private PedidoService pedidoService; // Agora usamos Service, não Repository!
 
     @Autowired
-    private MotoboyRepository motoboyRepository; // Injeção do repo do motoboy
+    private PedidoAssembler assembler;
 
-    // --- CRUD BÁSICO ---
+    // NOVO: Paginação (Ex: /api/pedidos?page=0&size=10)
     @GetMapping
-    public List<Pedido> listarTodos() {
-        return pedidoRepository.findAll();
+    public Page<PedidoResumoDTO> listarTodos(@PageableDefault(size = 10) Pageable pageable) {
+        Page<Pedido> pedidosPage = pedidoService.listarTodos(pageable);
+
+        // Convertendo a página de Entidades para página de DTOs
+        return pedidosPage.map(pedido -> assembler.toDTO(pedido));
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<Pedido> buscarPorId(@PathVariable Long id) {
-        return pedidoRepository.findById(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+    public PedidoResumoDTO buscarPorId(@PathVariable UUID id) {
+        return assembler.toDTO(pedidoService.buscarOuFalhar(id));
     }
 
     @PostMapping("/novo")
-    public ResponseEntity<Pedido> fazerPedido(@RequestBody Pedido pedido) {
-        return ResponseEntity.ok(pedidoRepository.save(pedido));
+    @ResponseStatus(HttpStatus.CREATED)
+    public PedidoResumoDTO fazerPedido(@RequestBody @Valid PedidoInputDTO pedidoInput) {
+        Pedido pedido = assembler.toEntity(pedidoInput);
+        pedido = pedidoService.emitir(pedido);
+        return assembler.toDTO(pedido);
     }
 
-    // --- LÓGICA DO MOTOBOY ---
+    // --- FLUXO DO MOTOBOY ---
 
     @GetMapping("/disponiveis-para-entrega")
-    public List<Pedido> listarDisponiveis() {
-        return pedidoRepository.findByStatus(StatusPedido.AGUARDANDO_PREPARO);
+    public List<PedidoResumoDTO> listarDisponiveis() {
+        return assembler.toCollectionDTO(pedidoService.listarDisponiveis());
     }
 
-    // A MÁGICA ACONTECE AQUI: Vincula Motoboy ID ao Pedido ID
     @PutMapping("/pegar-entrega/{idPedido}/{idMotoboy}")
-    public ResponseEntity<?> pegarParaEntrega(@PathVariable Long idPedido, @PathVariable Long idMotoboy) {
-
-        // 1. Constraint: O Motoboy existe?
-        Optional<Motoboy> motoboyOpt = motoboyRepository.findById(idMotoboy);
-        if (motoboyOpt.isEmpty()) {
-            return ResponseEntity.status(404).body("Motoboy inválido ou não encontrado.");
-        }
-
-        // 2. Constraint: O Pedido existe?
-        Optional<Pedido> pedidoOpt = pedidoRepository.findById(idPedido);
-        if (pedidoOpt.isEmpty()) {
-            return ResponseEntity.status(404).body("Pedido não encontrado.");
-        }
-
-        Pedido pedido = pedidoOpt.get();
-
-        // 3. Constraint: O Pedido está livre?
-        if (pedido.getStatus() != StatusPedido.AGUARDANDO_PREPARO) {
-            return ResponseEntity.badRequest().body("Pedido não está disponível. Status: " + pedido.getStatus());
-        }
-
-        // Tudo certo: Faz o vínculo
-        pedido.setStatus(StatusPedido.SAIU_PARA_ENTREGA);
-        pedido.setMotoboy(motoboyOpt.get()); // Passa o OBJETO Motoboy completo
-
-        return ResponseEntity.ok(pedidoRepository.save(pedido));
+    public PedidoResumoDTO pegarParaEntrega(@PathVariable UUID idPedido, @PathVariable UUID idMotoboy) {
+        Pedido pedido = pedidoService.pegarParaEntrega(idPedido, idMotoboy);
+        return assembler.toDTO(pedido);
     }
 
-    // Busca entregas pelo ID do motoboy
     @GetMapping("/minhas-entregas-atuais/{idMotoboy}")
-    public ResponseEntity<?> minhasEntregasAtuais(@PathVariable Long idMotoboy) {
-        Optional<Motoboy> motoboyOpt = motoboyRepository.findById(idMotoboy);
-        if (motoboyOpt.isEmpty()) return ResponseEntity.notFound().build();
-
-        List<Pedido> lista = pedidoRepository.findByMotoboyAndStatus(motoboyOpt.get(), StatusPedido.SAIU_PARA_ENTREGA);
-        return ResponseEntity.ok(lista);
+    public List<PedidoResumoDTO> minhasEntregasAtuais(@PathVariable UUID idMotoboy) {
+        return assembler.toCollectionDTO(pedidoService.listarEntregasAtuais(idMotoboy));
     }
 
     @PutMapping("/finalizar-entrega/{idPedido}")
-    public ResponseEntity<?> finalizarEntrega(@PathVariable Long idPedido) {
-        return pedidoRepository.findById(idPedido).map(pedido -> {
-            if (pedido.getStatus() != StatusPedido.SAIU_PARA_ENTREGA) {
-                // Aqui poderíamos lançar erro, mas vamos permitir finalizar
-            }
-            pedido.setStatus(StatusPedido.ENTREGUE);
-            pedido.setDataHoraEntrega(LocalDateTime.now());
-            return ResponseEntity.ok(pedidoRepository.save(pedido));
-        }).orElse(ResponseEntity.notFound().build());
+    public PedidoResumoDTO finalizarEntrega(@PathVariable UUID idPedido) {
+        Pedido pedido = pedidoService.finalizarEntrega(idPedido);
+        return assembler.toDTO(pedido);
     }
 
     @GetMapping("/historico/{idMotoboy}")
-    public ResponseEntity<?> historicoMotoboy(@PathVariable Long idMotoboy) {
-        Optional<Motoboy> motoboyOpt = motoboyRepository.findById(idMotoboy);
-        if (motoboyOpt.isEmpty()) return ResponseEntity.notFound().build();
+    public List<PedidoResumoDTO> historicoMotoboy(@PathVariable UUID idMotoboy) {
+        return assembler.toCollectionDTO(pedidoService.listarHistorico(idMotoboy));
+    }
 
-        return ResponseEntity.ok(pedidoRepository.findByMotoboyAndStatusOrderByDataHoraEntregaDesc(motoboyOpt.get(), StatusPedido.ENTREGUE));
+
+    @PutMapping("/devolver/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT) // Retorna 204 (Sucesso sem corpo)
+    public void devolverPedido(@PathVariable UUID id) {
+        pedidoService.devolverPedido(id);
     }
 }
